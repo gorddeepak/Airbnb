@@ -1,23 +1,42 @@
 const express = require('express');
-const app = express()
+const app = express();
 const mongoose = require('mongoose');
 const MONGO_URL = "mongodb://127.0.0.1:27017/airbnb";
-const Listing = require("./models/listing.js");
 const path = require("path");
 const methodOverride = require("method-override");
 const ejsMate = require("ejs-mate");
+const ExpressError = require("./utils/expressError.js");
+const listingsRoute = require("./routes/listing.js");
+const reviewRoute = require("./routes/review.js");
+const userRoute = require("./routes/user.js");
+const session = require('express-session');
+const flash = require("connect-flash");
+const passport = require("passport");
+const LocalStrategy = require("passport-local");
+const User = require("./models/user.js");
+
+const sessionOptions = {
+    secret : "verysecretcode",
+    resave : false,
+    saveUninitialized : true,
+    cookie : {
+        expires : Date.now() + 7 * 24 * 60 * 60 * 1000,
+        maxAge : 7 * 24 * 60 * 60 * 1000,
+        httpOnly : true,
+    },
+};
 
 async function main(){
     await mongoose.connect(MONGO_URL)
 }
 
+
 main().then(()=>{
     console.log("connected to db");
     app.listen(8080,() => {
-    console.log("server is listening on port 8080");
+        console.log("server is listening on port 8080");
 });
 })
-
 .catch((err)=>{
     console.log(err)
 });
@@ -28,78 +47,36 @@ app.use(express.urlencoded({extended: true}));
 app.use(methodOverride("_method"));
 app.engine("ejs", ejsMate);
 app.use(express.static(path.join(__dirname,"/public")));
+app.use(session(sessionOptions));
+app.use(flash());
+app.use(passport.initialize());
+app.use(passport.session());
+
+passport.use(new LocalStrategy(User.authenticate()));
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
+
+app.use((req,res,next)=>{
+    res.locals.success = req.flash("success");
+    res.locals.error = req.flash("error");
+    res.locals.isAuthenticated = req.isAuthenticated();
+    next();
+});
 
 app.get("/",(req, res)=>{
     res.send("Hi, I am root")
 });
 
-//index route
-app.get("/listings", async(req,res)=> {
-    const allListings = await Listing.find({});
-    res.render("listings/index.ejs", {allListings});
+app.use("/listings",listingsRoute);
+app.use("/listings/:listingId/review",reviewRoute);
+app.use("/",userRoute);
+
+app.all("*path", (req,res,next)=>{
+    next(new ExpressError(404 , "Page Not Found!"));
 });
 
-//New Route
-app.get("/listings/new", async(req,res)=>{
-    res.render("listings/new.ejs");
-})
-
-//Edit Route
-app.get("/listings/:id/edit", async(req,res)=>{
-    let {id} = req.params;
-    const listing = await Listing.findById(id);
-    res.render("listings/edit.ejs", {listing});
-});
-
-//Update Route
-app.put("/listings/:id", async(req,res)=>{
-    let {id} = req.params;
-    // res.send(req.body.listing)
-    if (!req.body.listing.image || req.body.listing.image.trim() === "") {
-        req.body.listing.image = "https://images.unsplash.com/photo-1480074568708-e7b720bb3f09";
-    }
-    await Listing.findByIdAndUpdate(id,{...req.body.listing});
-    res.redirect(`/listings/${id}`);
-});
-
-//Delete Route
-app.delete("/listings/:id", async(req,res)=>{
-    let {id} = req.params;
-    // res.send(req.body.listing)
-    const deletedLisitng = await Listing.findByIdAndDelete(id);
-    console.log(deletedLisitng);
-    res.redirect("/listings");
-});
-
-//read route
-app.get("/listings/:id", async(req,res)=>{
-    let {id} = req.params;
-    const listing = await Listing.findById(id);
-    res.render("listings/show.ejs", {listing});
-})
-
-//create route
-app.post("/listings", async(req,res)=>{
-    const newListing = new Listing(req.body.listing);
-    if (!newListing.image || newListing.image.trim() === "") {
-        newListing.image = "https://images.unsplash.com/photo-1480074568708-e7b720bb3f09";
-    }
-    await newListing.save();
-    res.redirect("/listings");
-});
-
-
-app.get("/testingdb", async(req,res) => {
-    let sampledata = new Listing({
-    title: "Modern Loft in Downtown",
-    description: "Stay in the heart of the city in this stylish loft apartment. Perfect for urban explorers!",
-    image: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=800&q=60",
-    price: 1200,
-    location: "New York City",
-    country: "United States",
-    });
-    await sampledata.save();
-    console.log("sample was saved");
-    res.send("sample saved");
-});
+app.use((err,req,res,next) => {
+    let {statusCode = 500, message = "something went wrong :( "} = err;
+    res.status(statusCode).render("error.ejs", {message});
+}); 
 
